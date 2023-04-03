@@ -1,6 +1,7 @@
 [org 0x7c00]
 VIDEO_MEM equ 0xb800
 
+HIDDEN equ 0x00
 UNCOVERED equ 0x61
 COVERED equ 0x77
 SELECTOR_UNCOVERED equ 0x2f
@@ -18,17 +19,22 @@ main:
     mov al, 0x03    ;set display mode(ah=00) to 3(al) to 80x25 color
     int 0x10
 
+    mov ah, 0x02
+    mov bh, 0
+    mov dx, 0x0123
+    int 0x10
+
     mov si, title
     call print
-
-
 
     mov ah, 0x02    ;read realtime clock
     int 0x1a        ;read, ch=hrs, cl=min, dh=sec
     mov ch, dh
     mov [seed], cx
 
+restart:
     mov bx, [cursor_offset] ;bx is the cursor register, it must always be maintained
+    call clear_field
     call generate
     
     call draw_cursor
@@ -36,14 +42,15 @@ loop:
     call get_input          ;sets key to ax
     call key_to_direction   ;converts key to direction in al
     cmp al, 4
-    je handle_click         ;==4
     jl handle_direction     ;<4
+    je handle_click         ;==4
     jmp loop                ;else
     handle_direction:
         call move_selector
         jmp loop
     handle_click:
         call click
+        call draw_cursor
         jmp loop
 
 print:
@@ -58,18 +65,37 @@ print_loop:
 print_end:
     ret
 
+clear_field:
+    push bx
+    sub bx, 164
+    mov ah, HIDDEN
+    mov al, 0x00
+    clear_field_loop:
+        mov [es:bx], ax
+        cmp bx, 0x0f9e
+        jge clear_field_end
+        add bx, 2
+        jmp clear_field_loop
+
+    clear_field_end:
+    pop bx
+    ret
+
 generate:
-    mov ah, COVERED
+    dec bx
     generate_col_loop:
         generate_row_loop:
+            mov byte [es:bx], COVERED
+            inc bx
             call random ;get random num in (e)dx
             cmp edx, 0x2fff ;difficulty set here, increase for more difficulty
-            mov al, '@'
             jg not_mine
-            mov al, 'M'
+            mine:
+                call put_num
+                add byte [es:bx], 0x20
             not_mine:
-            mov [es:bx], ax
-            add bx, 2
+            add byte [es:bx], 0x50
+            inc bx
             call divmod
             cmp dx, 154
             jle generate_row_loop
@@ -78,7 +104,67 @@ generate:
         cmp cx, 23
         jl generate_col_loop
 
-    sub bx, 0x692       
+    sub bx, 0x693       
+    ret
+
+random: ;linear congruential generator(LCG)
+    push ax
+    xor edx, edx
+    mov eax, [seed]
+    mul dword [a]       ;a
+    add eax, [c]        ;c
+    div dword [m]       ;m
+    mov [seed], edx
+    jmp math_ret
+
+put_num:
+    pusha
+    sub bx, 162     ;move bx to first position
+    xor ax, ax
+    mov si, places
+    put_num_loop:
+        inc byte [es:bx]
+        lodsb       ;move the byte at si, based on the data segment, into al
+        cmp al, 0
+        je return ;popa ret
+        add bx, ax
+        jmp put_num_loop
+
+divmod:     ;does bx/160, leaves qoutient(/) in cx and remainder(%) in dx
+    push ax
+    xor dx,dx
+    mov ax, bx
+    div word [MAX_COL]
+    mov cx, ax
+
+math_ret:
+    pop ax
+    ret
+
+draw_cursor:    ;postion in bx
+    mov ch, SELECTOR_COVERED
+    mov cl, SELECTOR_UNCOVERED
+
+    jmp draw
+
+undraw_cursor:  ;position in bx
+    mov ch, COVERED
+    mov cl, UNCOVERED
+
+draw:   ;position in bx, uncovered in cl and covered in ch
+    pusha
+    mov al,[es:bx]
+    add bx, 1
+    cmp al, 0x40
+    jg covered
+    uncovered:
+        mov [es:bx], cl
+        jmp return
+    covered:
+        mov [es:bx], ch
+
+return: ;general return used by many functions
+    popa
     ret
 
 get_input:      ;waits for keyboard input and leaves it in ax
@@ -148,95 +234,44 @@ move_selector_end:
 
 
 click:
-    cmp byte [es:bx], '@'
+    cmp byte [es:bx], '`'
     jg mine_hit
-    je check_num
-    jmp click_return
-    
-click_return:
-    call draw_cursor
-    ret
-
-check_num:                  ;looks byte at bx, uncovers and calcs the
-    sub byte [es:bx], 0x20
-    push bx
-    sub bx, 162     ;move bx to first position
-    xor ax, ax
-    mov cx, '0'
-    mov si, places
-    check_num_loop:
-        cmp byte [es:bx], 'M'
-        jl check_num_cont
-        inc cx
-        check_num_cont:
-        lodsb       ;move the byte at si, based on the data segment, into al
-        cmp al, 0
-        je check_num_end
-        add bx, ax
-        jmp check_num_loop
-
-    check_num_end:
-    pop bx
-    cmp cl, '0'
-    je click_return
-    mov [es:bx], cl
-    jmp click_return
-
-
-draw_cursor:    ;postion in bx
-    mov ch, SELECTOR_COVERED
-    mov cl, SELECTOR_UNCOVERED
-
-    jmp draw
-
-undraw_cursor:  ;position in bx
-    mov ch, COVERED
-    mov cl, UNCOVERED
-
-draw:   ;position in bx, uncovered in cl and covered in ch
-    pusha
-    mov al,[es:bx]
-    add bx, 1
-    cmp al, 0x3a
-    jg covered
-    uncovered:
-        mov [es:bx], cl
-        jmp return
-    covered:
-        mov [es:bx], ch
-
-return:
-    popa
-    ret
-
-random: ;linear congruential generator(LCG)
-    push ax
-    xor edx, edx
-    mov eax, [seed]
-    mul dword [a]       ;a
-    add eax, [c]        ;c
-    div dword [m]       ;m
-    mov [seed], edx
-    jmp math_ret
-
-divmod:     ;does bx/160, leaves qoutient(/) in cx and remainder(%) in dx
-    push ax
-    xor dx,dx
-    mov ax, bx
-    div word [MAX_COL]
-    mov cx, ax
-
-math_ret:
-    pop ax
-    ret
+    cmp byte [es:bx], 'P'
+    jl click_end
+    jg set_num
+    sub byte [es:bx],0x10
+    call clear_space
+    set_num:
+        sub byte [es:bx],0x20
+        call undraw_cursor
+    click_end:
+        ret
 
 mine_hit:
-    hlt ;reset
+    mov si, hit_message
+    call print
+    call get_input ;wait for a key to be pressed
+    jmp main ;restart
 
-;number math numbers
-places:
-    db 2,2,156,4,156,2,2,0
+clear_space:
+    pusha
+    sub bx, 162     ;move bx to first position
+    xor ax, ax
+    mov si, places
+    clear_space_loop:
+        call click  ;recursive functions my beloved
+        lodsb       ;move the byte at si, based on the data segment, into al
+        cmp al, 0
+        je return ;popa ret
+        add bx, ax
+        jmp clear_space_loop
 
+
+;constants
+MAX_COL:
+    dw 160
+cursor_offset:
+    dw 0x01e4
 ;PRNG constants
 a:
     dd 0x41c64e6d
@@ -244,14 +279,17 @@ c:
     dd 0x3039
 m:
     dd 0x10000
-MAX_COL:
-    dw 160
-cursor_offset:
-    dw 0x01e4
+;loop constants
+places:
+    db 2,2,156,4,156,2,2,0
+;strings
+title:
+    db 'MBRsweeper ',0
+hit_message:
+    db 'F',0x07,0 ;pay respects, beeeep
+;memory storage
 seed:
     dd 0x09
-title:
-    db 0x0a,'                                     MBRsweeper',0
 
 
 ; Fill with 510 zeros minus the size of the previous code
