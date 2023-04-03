@@ -19,9 +19,9 @@ main:
     mov al, 0x03    ;set display mode(ah=00) to 3(al) to 80x25 color
     int 0x10
 
-    mov ah, 0x02
-    mov bh, 0
-    mov dx, 0x0123
+    mov ah, 0x02    ;mov cursor
+    mov bh, 0       ;screen 0
+    mov dx, 0x0122  ;row 0x01, col 0x22
     int 0x10
 
     mov si, title
@@ -29,10 +29,8 @@ main:
 
     mov ah, 0x02    ;read realtime clock
     int 0x1a        ;read, ch=hrs, cl=min, dh=sec
-    mov ch, dh
+    mov ch, dh      ;move seconds over hours to get more randoms seed
     mov [seed], cx
-
-restart:
     mov bx, [cursor_offset] ;bx is the cursor register, it must always be maintained
     call clear_field
     call generate
@@ -82,11 +80,8 @@ clear_field:
     ret
 
 generate:
-    dec bx
     generate_col_loop:
         generate_row_loop:
-            mov byte [es:bx], COVERED
-            inc bx
             call random ;get random num in (e)dx
             cmp edx, 0x2fff ;difficulty set here, increase for more difficulty
             jg not_mine
@@ -96,6 +91,8 @@ generate:
             not_mine:
             add byte [es:bx], 0x50
             inc bx
+            mov byte [es:bx], COVERED
+            inc bx
             call divmod
             cmp dx, 154
             jle generate_row_loop
@@ -104,7 +101,7 @@ generate:
         cmp cx, 23
         jl generate_col_loop
 
-    sub bx, 0x693       
+    sub bx, 0x696   ;return to center of minefield
     ret
 
 random: ;linear congruential generator(LCG)
@@ -115,9 +112,9 @@ random: ;linear congruential generator(LCG)
     add eax, [c]        ;c
     div dword [m]       ;m
     mov [seed], edx
-    jmp math_ret
+    jmp math_ret ;pop ax ret
 
-put_num:
+put_num:    ;adds 1 to all the adjecent squares of location es:bx
     pusha
     sub bx, 162     ;move bx to first position
     xor ax, ax
@@ -284,9 +281,9 @@ places:
     db 2,2,156,4,156,2,2,0
 ;strings
 title:
-    db 'MBRsweeper ',0
+    db 0x01,'MBRsweeper',0
 hit_message:
-    db 'F',0x07,0 ;pay respects, beeeep
+    db ' F',0x07,0 ;pay respects, beeeep
 ;memory storage
 seed:
     dd 0x09
